@@ -3,71 +3,100 @@ from fastapi.responses import JSONResponse
 import uvicorn
 import tempfile
 import os
-import pandas as pd
+import logging
+from json import loads, dumps
 import openai
-import fitz
-import nltk
-nltk.download('punkt')
-from nltk import tokenize
+import pandas as pd
+from pdf2qaconverter import PDF2QAConverter  # PDF2QA class
+from dotenv import load_dotenv
+import time
+
+# Load the OpenAI API Key
+# Create a .env file storing your key
+load_dotenv('openai_key.env')
+
+# Log configuration
+logging.basicConfig(filename='pdf2qa.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # Define the FastAPI instance
 app = FastAPI()    
 
-# Function to convert the pdf file to text
-def get_text_data(pdf_path: str) -> str:
-  with fitz.open(pdf_path) as doc:
-      text = ""
-      for page in doc:
-          text += page.get_text()
+# Function to extract the QnA from the pdf file
+def extract_qna_pairs(pdf_path: str) -> list:
+    text_data = PDF2QAConverter.get_text_data(pdf_path)
+    paragraphs = PDF2QAConverter.get_paragraphs(text_data)
 
-      return text
-  
-# Function to tokenize the text and return the paragraphs
-def get_paragraphs(pdf_path: str) -> list:
-    # Extract the text data from the pdf
-    text_data = get_text_data(pdf_path)
-
-    # Tokenize the text by sentences
-    result = tokenize. sent_tokenize(text_data)
-
-    # Variables to store the tokenized strings and paragraphs
-    str_paragraph = ''
-    paragraphs = []
-
-    # Iterate through the tokenized sentences
-    for i in range(len(result)):
-        sentence = result[i]
-        len_para = len(tokenize.word_tokenize(str_paragraph))
-
-        if len_para < 200:
-            str_paragraph += ' ' +  sentence
-        elif len_para >= 200:
-            paragraphs.append(str_paragraph)
-            str_paragraph = ''
-            str_paragraph += ' ' + sentence
-        elif i == len(result) - 1:
-            paragraphs.append(str_paragraph)
+    qna_pairs = []
     
-    # Return the paragraphs
-    return paragraphs
+    # Define the api key
+    openai.api_key = os.environ.get('OPENAI_API_KEY')
+    for index, para in enumerate(paragraphs):
+        logging.info(f'Processing Paragraph {index + 1}')
+       
+        para = para.replace('\n', '')
+        qna = []
+        
+        logging.info(f'Extracting QNA for Paragraph: {para}')
+        response = PDF2QAConverter.get_qna_openai(para)
+        logging.info(f'Extracted QNA for Paragraph: {response}')
 
-# API Endpoint to upload file
+        qna.append(response)
+
+        with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_file:
+            logging.info('Opened the temporary file')
+            for qa in qna:
+                try:
+                    temp_file.write(qa)
+                except Exception as err:
+                    logging.info(f'{err} in Paragraph {index + 1}')
+                    #break
+
+            temp_file.flush()
+            temp_file_path = temp_file.name
+
+        try:
+            with open(temp_file_path, 'r') as temp_file:
+                lines = temp_file.readlines()
+                pairs = PDF2QAConverter.parse_qa_pairs(lines)
+                logging.info('Extracted QNA pairs')
+        except Exception as err:
+            logging.info(err)
+            #break
+
+        for q, a in pairs:
+            try:
+                qna_pairs.append({'Paragraph': para.strip(), 'Question': PDF2QAConverter.remove_qa_prefix(q), 'Answer': PDF2QAConverter.remove_qa_prefix(a)})
+            except Exception as err:
+                logging.info('QnA was an empty sequence, moving to the next set')
+                logging.info(err)
+                #break
+
+    return qna_pairs
+
+# API endpoint to upload the PDF file
 @app.post('/upload-pdf')
 async def upload_pdf(file: UploadFile):
     try:
-        # Create a temporary directory to save the uploaded file
+        logging.info('Starting PDF2QA Converter...')
         with tempfile.TemporaryDirectory() as temp_dir:
             pdf_path = os.path.join(temp_dir, file.filename)
+            logging.info(f'Created temporary directory: {temp_dir}')
 
-            # Save the uploaded PDF file to the temporary directory
             with open(pdf_path, "wb") as pdf_file:
                 pdf_file.write(file.file.read())
-            
-            # Extract the paragraphs
-            paragraphs = get_paragraphs(pdf_path)
+                logging.info(f'Saved the PDF file in the directory {pdf_path}')
+                time.sleep(0.5)
 
-            return JSONResponse(content={'message': 'PDF successfully uploaded, saved and extracted!', 'paragraphs': paragraphs})
+            qna_pairs = extract_qna_pairs(pdf_path)
+
+            if not qna_pairs:
+                logging.info('No QNA pairs found in the PDF')
+                return JSONResponse(content={'message': 'No QNA pairs found in the PDF.'})
+            
+            logging.info(f'PDF successfully uploaded, saved and extracted!')
+            return JSONResponse(content={'message': 'PDF successfully uploaded, saved, and QNA pairs extracted!', 'data': qna_pairs})
     except Exception as err:
-        return JSONResponse(content={'message': 'upload_pdf function error\n' + str(err)})
+        return JSONResponse(content={'message': str(err)})
+    
 if __name__ == '__main__':
     uvicorn.run(app)
