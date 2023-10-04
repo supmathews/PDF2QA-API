@@ -21,8 +21,16 @@ logging.basicConfig(filename='pdf2qa.log', level=logging.INFO, format='%(asctime
 # Define the FastAPI instance
 app = FastAPI()    
 
-# Function to extract the QnA from the pdf file
 def extract_qna_pairs(pdf_path: str) -> list:
+    """
+    This function extracts the QnA from the pdf file.
+    
+    Args:
+        pdf_path (string): Path of the PDF file saved in the temporary directory
+    
+    Returns:
+        list: contains the QnA pair
+    """
     text_data = PDF2QAConverter.get_text_data(pdf_path)
     paragraphs = PDF2QAConverter.get_paragraphs(text_data)
 
@@ -76,6 +84,17 @@ def extract_qna_pairs(pdf_path: str) -> list:
 # API endpoint to upload the PDF file
 @app.post('/upload-pdf')
 async def upload_pdf(file: UploadFile):
+    """
+        API endpoint to upload the PDF file. 
+        The function will store the PDF file in a temporary directory which
+        will be active until the PDF is successfully uploaded, saved, and
+        QNA pairs are extracted.
+
+        Args:
+            file (UploadFile): form-data object uploaded by the user
+        Returns:
+            JSONResponse: key-value of message and data
+    """
     try:
         logging.info('Starting PDF2QA Converter...')
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -85,7 +104,7 @@ async def upload_pdf(file: UploadFile):
             with open(pdf_path, "wb") as pdf_file:
                 pdf_file.write(file.file.read())
                 logging.info(f'Saved the PDF file in the directory {pdf_path}')
-                time.sleep(0.5)
+                #time.sleep(0.5)
 
             qna_pairs = extract_qna_pairs(pdf_path)
 
