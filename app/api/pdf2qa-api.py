@@ -1,19 +1,10 @@
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, UploadFile
 from fastapi.responses import JSONResponse
 import uvicorn
 import tempfile
 import os
 import logging
-from json import loads, dumps
-import openai
-import pandas as pd
 from pdf2qaconverter import PDF2QAConverter  # PDF2QA class
-from dotenv import load_dotenv
-import time
-
-# Load the OpenAI API Key
-# Create a .env file storing your key
-load_dotenv('openai_key.env')
 
 # Log configuration
 logging.basicConfig(filename='pdf2qa.log', level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -31,55 +22,17 @@ def extract_qna_pairs(pdf_path: str) -> list:
     Returns:
         list: contains the QnA pair
     """
+    
+    logging.info('Extracting text contents from the PDF file. . .')
     text_data = PDF2QAConverter.get_text_data(pdf_path)
+
+    logging.info('Extracting the paragraphs from the text content. . .')
     paragraphs = PDF2QAConverter.get_paragraphs(text_data)
 
-    qna_pairs = []
-    
-    # Define the api key
-    openai.api_key = os.environ.get('OPENAI_API_KEY')
-    for index, para in enumerate(paragraphs):
-        logging.info(f'Processing Paragraph {index + 1}')
-       
-        para = para.replace('\n', '')
-        qna = []
-        
-        logging.info(f'Extracting QNA for Paragraph: {para}')
-        response = PDF2QAConverter.get_qna_openai(para)
-        logging.info(f'Extracted QNA for Paragraph: {response}')
+    logging.info('Extracting the QNA from the paragraphs. . .')
+    responses = PDF2QAConverter.get_qna_openai(paragraphs)
 
-        qna.append(response)
-
-        with tempfile.NamedTemporaryFile(mode='w', delete=False) as temp_file:
-            logging.info('Opened the temporary file')
-            for qa in qna:
-                try:
-                    temp_file.write(qa)
-                except Exception as err:
-                    logging.info(f'{err} in Paragraph {index + 1}')
-                    #break
-
-            temp_file.flush()
-            temp_file_path = temp_file.name
-
-        try:
-            with open(temp_file_path, 'r') as temp_file:
-                lines = temp_file.readlines()
-                pairs = PDF2QAConverter.parse_qa_pairs(lines)
-                logging.info('Extracted QNA pairs')
-        except Exception as err:
-            logging.info(err)
-            #break
-
-        for q, a in pairs:
-            try:
-                qna_pairs.append({'Paragraph': para.strip(), 'Question': PDF2QAConverter.remove_qa_prefix(q), 'Answer': PDF2QAConverter.remove_qa_prefix(a)})
-            except Exception as err:
-                logging.info('QnA was an empty sequence, moving to the next set')
-                logging.info(err)
-                #break
-
-    return qna_pairs
+    return responses
 
 # API endpoint to upload the PDF file
 @app.post('/upload-pdf')
@@ -105,7 +58,8 @@ async def upload_pdf(file: UploadFile):
                 pdf_file.write(file.file.read())
                 logging.info(f'Saved the PDF file in the directory {pdf_path}')
                 #time.sleep(0.5)
-
+            
+            # Extracting the QNA from the PDF file
             qna_pairs = extract_qna_pairs(pdf_path)
 
             if not qna_pairs:
